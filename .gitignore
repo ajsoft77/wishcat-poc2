@@ -1,0 +1,7 @@
+node_modules
+dist
+*.log
+.env*
+
+# 저장소에는 소스만 올린다
+docs/*

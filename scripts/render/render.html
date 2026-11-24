@@ -1,0 +1,476 @@
+<!doctype html>
+<!-- 부품 카테고리 이미지를 3D 로 렌더링하는 페이지. scripts/render/run.cjs 가 헤드리스 브라우저로 열어 public/img/*.jpg 를 만든다. -->
+<meta charset="utf-8" />
+<script type="importmap">
+  { "imports": { "three": "THREE_ROOT/build/three.module.js", "three/addons/": "THREE_ROOT/examples/jsm/" } }
+</script>
+<body style="margin: 0; background: #fff">
+  <script type="module">
+    import * as THREE from 'three';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+    const W = 1600, H = 1200, OUT_W = 800, OUT_H = 600;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    renderer.setSize(W, H);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.VSMShadowMap;
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    document.body.appendChild(renderer.domElement);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const env = pmrem.fromScene(new RoomEnvironment(), 0.03).texture;
+
+    // ───────── 재질 · 도우미 ─────────
+    const M = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0, ...o });
+    const steel = M(0xc4c9d1, { metalness: 1, roughness: 0.3 });
+    const chrome = M(0xe6e9ee, { metalness: 1, roughness: 0.12 });
+    const iron = M(0x8d939b, { metalness: 0.9, roughness: 0.45 });
+    const dark = M(0x15171a, { roughness: 0.85 });
+    const rubber = M(0x1b1c1f, { roughness: 0.92 });
+    const blackPaint = M(0x1c1e22, { roughness: 0.32, metalness: 0.2 });
+
+    function mesh(geo, mat, x = 0, y = 0, z = 0) {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.castShadow = m.receiveShadow = true;
+      return m;
+    }
+    const cyl = (rt, rb, h, mat, seg = 48) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+    const box = (w, h, d, mat) => mesh(new THREE.BoxGeometry(w, h, d), mat);
+    const rbox = (w, h, d, r, mat) => mesh(new RoundedBoxGeometry(w, h, d, 5, r), mat);
+    function lathe(points, mat, seg = 64) {
+      const m = mesh(new THREE.LatheGeometry(points.map(([r, y]) => new THREE.Vector2(r, y)), seg), mat);
+      m.material = mat.clone();
+      m.material.side = THREE.DoubleSide;
+      return m;
+    }
+    const grp = (...c) => { const g = new THREE.Group(); g.add(...c); return g; };
+
+    // 주름(필터 여과지)
+    function pleats(w, d, h, n, mat) {
+      const v = [];
+      const quad = (x0, y0, x1, y1) => {
+        const a = [x0, y0, -d / 2], b = [x1, y1, -d / 2], c = [x1, y1, d / 2], e = [x0, y0, d / 2];
+        v.push(...a, ...e, ...c, ...a, ...c, ...b);
+      };
+      for (let i = 0; i < n; i++) {
+        const x0 = -w / 2 + (i * w) / n, xm = x0 + w / (2 * n), x1 = x0 + w / n;
+        quad(x0, 0, xm, h);
+        quad(xm, h, x1, 0);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+      g.computeVertexNormals();
+      const m = mat.clone();
+      m.side = THREE.DoubleSide;
+      return mesh(g, m);
+    }
+
+    // ───────── 부품 모델 ─────────
+    const MODELS = {
+      disc() {
+        const g = new THREE.Group();
+        const face = M(0x8a9098, { metalness: 1, roughness: 0.46 });
+        g.add(lathe([[0.6, 0], [1.3, 0], [1.3, 0.07], [0.6, 0.07]], face));
+        g.add(lathe([[0.6, 0.13], [1.3, 0.13], [1.3, 0.2], [0.6, 0.2]], face));
+        g.add(lathe([[0.62, 0.07], [0.62, 0.13]], dark));
+        for (let i = 0; i < 44; i++) {
+          const a = (i / 44) * Math.PI * 2;
+          const fin = box(0.62, 0.06, 0.035, iron);
+          fin.position.set(Math.cos(a) * 0.97, 0.1, Math.sin(a) * 0.97);
+          fin.rotation.y = -a + 0.35;
+          g.add(fin);
+        }
+        const hat = M(0x24272c, { metalness: 0.6, roughness: 0.4 });
+        g.add(lathe([[0.22, 0.4], [0.5, 0.4], [0.58, 0.36], [0.6, 0.2], [0.6, 0.07], [0.22, 0.07], [0.22, 0.4]], hat));
+        const hole = new THREE.CircleGeometry(0.034, 20);
+        for (let arm = 0; arm < 12; arm++)
+          for (let k = 0; k < 4; k++) {
+            const a = (arm / 12) * Math.PI * 2 + k * 0.16, r = 0.74 + k * 0.15;
+            const h = mesh(hole, dark, Math.cos(a) * r, 0.2015, Math.sin(a) * r);
+            h.rotation.x = -Math.PI / 2;
+            h.castShadow = false;
+            g.add(h);
+          }
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2 + 0.3;
+          const h = mesh(new THREE.CircleGeometry(0.05, 20), dark, Math.cos(a) * 0.37, 0.4015, Math.sin(a) * 0.37);
+          h.rotation.x = -Math.PI / 2;
+          g.add(h);
+        }
+        const back = g.clone();
+        back.position.set(1.15, 0, -1.75);
+        back.rotation.y = 1.1;
+        return grp(g, back);
+      },
+
+      pad() {
+        const sector = (ri, ro, a) => {
+          const s = new THREE.Shape();
+          s.absarc(0, 0, ro, Math.PI / 2 + a, Math.PI / 2 - a, true);
+          s.absarc(0, 0, ri, Math.PI / 2 - a, Math.PI / 2 + a, false);
+          s.closePath();
+          return s;
+        };
+        const one = () => {
+          const g = new THREE.Group();
+          const plate = mesh(new THREE.ExtrudeGeometry(sector(1.5, 2.36, 0.56), { depth: 0.07, bevelEnabled: true, bevelSize: 0.012, bevelThickness: 0.012, bevelSegments: 2, curveSegments: 40 }), M(0x2b3440, { metalness: 0.7, roughness: 0.42 }));
+          const lining = mesh(new THREE.ExtrudeGeometry(sector(1.58, 2.28, 0.5), { depth: 0.2, bevelEnabled: true, bevelSize: 0.03, bevelThickness: 0.03, bevelSegments: 3, curveSegments: 40 }), M(0x4a4640, { roughness: 0.95 }), 0, 0, 0.08);
+          const slot = box(0.05, 0.76, 0.08, dark);
+          slot.position.set(0, 1.93, 0.3);
+          const earL = box(0.2, 0.2, 0.07, plate.material), earR = earL.clone();
+          earL.position.set(-1.32, 1.96, 0.035);
+          earR.position.set(1.32, 1.96, 0.035);
+          const shim = mesh(new THREE.ExtrudeGeometry(sector(1.6, 2.26, 0.46), { depth: 0.012, bevelEnabled: false, curveSegments: 40 }), M(0x9aa1ab, { metalness: 1, roughness: 0.35 }), 0, 0, -0.013);
+          g.add(plate, lining, slot, earL, earR, shim);
+          g.position.y = -1.93;
+          return grp(g);
+        };
+        const a = one();
+        a.rotation.x = -Math.PI / 2;
+        a.rotation.z = 0.2;
+        a.position.set(-0.25, 0.02, 0.45);
+        const b = one();
+        b.rotation.x = Math.PI / 2;
+        b.rotation.z = 0.5;
+        b.position.set(0.55, 0.36, -0.42);
+        return grp(a, b);
+      },
+
+      oilf() {
+        const paint = M(0x1f3f7a, { roughness: 0.22, metalness: 0.35 });
+        const one = () => {
+          const g = new THREE.Group();
+          const body = cyl(0.6, 0.6, 1.05, paint, 64);
+          body.position.y = 0.6;
+          const flute = mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.3, 14, 1), paint.clone(), 0, 1.27, 0);
+          flute.material.flatShading = true;
+          const cap = mesh(new THREE.CylinderGeometry(0.2, 0.5, 0.1, 14, 1), flute.material, 0, 1.47, 0);
+          const top = cyl(0.2, 0.2, 0.02, paint, 14);
+          top.position.y = 1.52;
+          const seam = mesh(new THREE.TorusGeometry(0.6, 0.022, 12, 64), steel, 0, 0.075, 0);
+          seam.rotation.x = Math.PI / 2;
+          const base = cyl(0.6, 0.6, 0.075, steel, 64);
+          base.position.y = 0.0375;
+          const gasket = mesh(new THREE.TorusGeometry(0.46, 0.04, 12, 64), rubber, 0, -0.01, 0);
+          gasket.rotation.x = Math.PI / 2;
+          const thread = mesh(new THREE.CircleGeometry(0.15, 32), dark, 0, -0.002, 0);
+          thread.rotation.x = Math.PI / 2;
+          g.add(body, flute, cap, top, seam, base, gasket, thread);
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const h = mesh(new THREE.CircleGeometry(0.055, 18), dark, Math.cos(a) * 0.3, -0.002, Math.sin(a) * 0.3);
+            h.rotation.x = Math.PI / 2;
+            g.add(h);
+          }
+          const band = cyl(0.603, 0.603, 0.36, M(0xf2f3f5, { roughness: 0.4 }), 64);
+          band.position.y = 0.62;
+          g.add(band);
+          return g;
+        };
+        const a = one();
+        a.position.set(-0.55, 0, 0.1);
+        const b = one();
+        b.rotation.z = Math.PI / 2;
+        b.rotation.y = -0.95;
+        b.position.set(1.0, 0.6, 0.55);
+        return grp(a, b);
+      },
+
+      airf() {
+        const g = new THREE.Group();
+        const frame = M(0xe2571c, { roughness: 0.7 });
+        const w = 2.5, d = 1.7, t = 0.17, h = 0.34;
+        const l1 = rbox(w, h, t, 0.05, frame), l2 = l1.clone(), s1 = rbox(t, h, d, 0.05, frame), s2 = s1.clone();
+        l1.position.set(0, h / 2, d / 2 - t / 2);
+        l2.position.set(0, h / 2, -d / 2 + t / 2);
+        s1.position.set(w / 2 - t / 2, h / 2, 0);
+        s2.position.set(-w / 2 + t / 2, h / 2, 0);
+        const lip = rbox(w + 0.12, 0.05, d + 0.12, 0.02, frame);
+        lip.position.y = 0.025;
+        const paper = pleats(w - 2 * t, d - 2 * t, 0.27, 26, M(0xe9d38f, { roughness: 1 }));
+        paper.position.y = 0.04;
+        g.add(l1, l2, s1, s2, lip, paper);
+        g.rotation.y = 0.42;
+        return g;
+      },
+
+      cabin() {
+        const one = (paperColor) => {
+          const g = new THREE.Group();
+          const w = 2.3, d = 1.9, h = 0.3;
+          const paper = pleats(w, d, h, 28, M(paperColor, { roughness: 1 }));
+          const band = M(0xb9c4d1, { roughness: 0.95 });
+          const b1 = box(w, h, 0.03, band), b2 = b1.clone();
+          b1.position.set(0, h / 2, d / 2);
+          b2.position.set(0, h / 2, -d / 2);
+          g.add(paper, b1, b2);
+          return g;
+        };
+        const a = one(0xe9ebe6);
+        a.rotation.y = 0.38;
+        a.position.set(-0.2, 0, 0.35);
+        const b = one(0x6f757d);
+        b.rotation.y = -0.25;
+        b.position.set(1.0, 0, -1.7);
+        return grp(a, b);
+      },
+
+      wiper() {
+        const blade = (L) => {
+          const g = new THREE.Group();
+          const s = new THREE.Shape();
+          s.moveTo(-0.09, 0);
+          s.lineTo(0.09, 0);
+          s.quadraticCurveTo(0.03, 0.05, 0.035, 0.17);
+          s.lineTo(-0.02, 0.17);
+          s.quadraticCurveTo(-0.05, 0.06, -0.09, 0);
+          const geo = new THREE.ExtrudeGeometry(s, { depth: L, bevelEnabled: false, steps: 60, curveSegments: 8 });
+          geo.translate(0, 0, -L / 2);
+          const lipGeo = new THREE.BoxGeometry(0.022, 0.1, L * 0.985, 1, 1, 60);
+          lipGeo.translate(0, -0.05, 0);
+          for (const ge of [geo, lipGeo]) {
+            const p = ge.attributes.position;
+            for (let i = 0; i < p.count; i++) p.setY(i, p.getY(i) - 0.11 * (p.getZ(i) / (L / 2)) ** 2);
+            ge.computeVertexNormals();
+          }
+          const spoiler = mesh(geo, M(0x1d1f23, { roughness: 0.38, metalness: 0.15 }));
+          const lip = mesh(lipGeo, rubber);
+          const conn = rbox(0.2, 0.15, 0.42, 0.03, M(0x2e3238, { roughness: 0.5 }));
+          conn.position.y = 0.13;
+          const pin = cyl(0.03, 0.03, 0.24, steel, 16);
+          pin.rotation.z = Math.PI / 2;
+          pin.position.y = 0.15;
+          const capGeo = new THREE.BoxGeometry(0.2, 0.2, 0.12);
+          const c1 = mesh(capGeo, conn.material, 0, -0.03, L / 2 - 0.05), c2 = mesh(capGeo, conn.material, 0, -0.03, -L / 2 + 0.05);
+          g.add(spoiler, lip, conn, pin, c1, c2);
+          g.rotation.z = Math.PI / 2; // 옆으로 눕혀 휜 모양이 보이게
+          return grp(g);
+        };
+        const a = blade(3.2);
+        a.rotation.y = 1.05;
+        a.position.set(0, 0.1, 0.3);
+        const b = blade(2.5);
+        b.rotation.y = 1.05;
+        b.position.set(0.25, 0.1, -0.35);
+        return grp(a, b);
+      },
+
+      plug() {
+        const one = () => {
+          const g = new THREE.Group();
+          const nickel = M(0xcfd3d9, { metalness: 1, roughness: 0.26 });
+          const thread = [];
+          for (let y = 0.02; y <= 0.72; y += 0.035) thread.push([0.2, y], [0.165, y + 0.0175]);
+          g.add(lathe([[0, 0], [0.16, 0], [0.19, 0.02], ...thread, [0.2, 0.74], [0.27, 0.78], [0.27, 0.9]], nickel));
+          const hex = mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.26, 6), nickel.clone(), 0, 1.03, 0);
+          hex.material.flatShading = true;
+          g.add(hex);
+          g.add(lathe([[0.27, 1.16], [0.25, 1.24], [0.2, 1.27]], nickel));
+          const ribs = [];
+          for (let y = 1.78; y <= 2.06; y += 0.07) ribs.push([0.2, y], [0.2, y + 0.03], [0.155, y + 0.035], [0.155, y + 0.065]);
+          g.add(lathe([[0.2, 1.26], [0.215, 1.3], [0.2, 1.75], ...ribs, [0.15, 2.13], [0.09, 2.15]], M(0xfafafa, { roughness: 0.16 })));
+          g.add(lathe([[0.075, 2.14], [0.075, 2.22], [0.105, 2.24], [0.105, 2.36], [0.08, 2.4], [0, 2.4]], nickel));
+          const tip = cyl(0.035, 0.035, 0.1, nickel, 16);
+          tip.position.y = -0.045;
+          const ins = lathe([[0.085, 0.0], [0.06, -0.06], [0, -0.06]], M(0xf2f0ea, { roughness: 0.3 }));
+          const e1 = box(0.045, 0.16, 0.07, nickel), e2 = box(0.2, 0.04, 0.07, nickel);
+          e1.position.set(0.15, -0.07, 0);
+          e2.position.set(0.07, -0.15, 0);
+          g.add(tip, ins, e1, e2);
+          g.position.y = -1.15;
+          return grp(g);
+        };
+        const lay = (x, z, ry, roll) => {
+          const p = one();
+          p.rotation.y = roll; // 제 축으로 굴림
+          const tilt = grp(p);
+          tilt.rotation.z = Math.PI / 2; // 눕힘
+          const out = grp(tilt);
+          out.rotation.y = ry;
+          out.position.set(x, 0.3, z);
+          return out;
+        };
+        return grp(lay(-0.25, 0.8, 0.45, 0.2), lay(0.15, 0, 0.45, 1.25), lay(0.55, -0.8, 0.45, 2.3));
+      },
+
+      shock() {
+        const g = new THREE.Group();
+        const body = M(0x2a2d33, { roughness: 0.28, metalness: 0.5 });
+        const eye = mesh(new THREE.TorusGeometry(0.15, 0.065, 16, 40), steel, 0, 0.2, 0);
+        const bush = cyl(0.09, 0.09, 0.2, rubber, 24);
+        bush.rotation.x = Math.PI / 2;
+        bush.position.y = 0.2;
+        const tube = cyl(0.21, 0.21, 1.5, body, 48);
+        tube.position.y = 1.1;
+        const collar = cyl(0.235, 0.235, 0.1, steel, 48);
+        collar.position.y = 1.88;
+        const seatL = lathe([[0.2, 1.3], [0.46, 1.3], [0.5, 1.36], [0.46, 1.36], [0.22, 1.34]], blackPaint);
+        const rod = cyl(0.075, 0.075, 1.25, chrome, 32);
+        rod.position.y = 2.5;
+        const boot = cyl(0.13, 0.13, 0.5, rubber, 32);
+        boot.position.y = 2.85;
+        const seatU = lathe([[0.1, 3.1], [0.46, 3.1], [0.5, 3.04], [0.46, 3.04], [0.12, 3.06]], blackPaint);
+        const mount = lathe([[0.08, 3.1], [0.4, 3.1], [0.34, 3.24], [0.08, 3.24]], rubber);
+        const stud = cyl(0.045, 0.045, 0.22, steel, 16);
+        stud.position.y = 3.33;
+        class Helix extends THREE.Curve {
+          getPoint(t) {
+            const a = t * Math.PI * 2 * 6.2;
+            return new THREE.Vector3(Math.cos(a) * 0.36, 1.42 + t * 1.6, Math.sin(a) * 0.36);
+          }
+        }
+        const spring = mesh(new THREE.TubeGeometry(new Helix(), 400, 0.055, 14), M(0xc8202a, { roughness: 0.3, metalness: 0.3 }));
+        g.add(eye, bush, tube, collar, seatL, rod, boot, seatU, mount, stud, spring);
+        g.position.y = -1.7;
+        const lay = grp(g);
+        lay.rotation.order = 'YZX';
+        lay.rotation.z = Math.PI / 2 - 0.02;
+        lay.rotation.y = 0.5;
+        lay.position.y = 0.5;
+        return grp(lay);
+      },
+
+      batt() {
+        const g = new THREE.Group();
+        const caseM = M(0x1d1f23, { roughness: 0.55 });
+        const body = rbox(2.2, 1.1, 1.25, 0.05, caseM);
+        body.position.y = 0.55;
+        const lid = rbox(2.26, 0.26, 1.31, 0.05, M(0x2f333a, { roughness: 0.5 }));
+        lid.position.y = 1.18;
+        g.add(body, lid);
+        for (let i = 0; i < 5; i++) {
+          const rib = box(0.03, 0.8, 1.27, caseM);
+          rib.position.set(-0.8 + i * 0.4, 0.5, 0);
+          g.add(rib);
+        }
+        const lead = M(0xb4b8bd, { metalness: 0.95, roughness: 0.42 });
+        for (const [x, color] of [[-0.82, 0xc8202a], [0.82, 0x111316]]) {
+          const pad = rbox(0.34, 0.03, 0.34, 0.012, M(color, { roughness: 0.5 }));
+          pad.position.set(x, 1.32, 0.33);
+          const post = cyl(0.085, 0.1, 0.2, lead, 32);
+          post.position.set(x, 1.42, 0.33);
+          g.add(pad, post);
+        }
+        for (let i = 0; i < 6; i++) {
+          const cap = cyl(0.1, 0.1, 0.03, M(0x3d424a, { roughness: 0.4 }), 28);
+          cap.position.set(-0.75 + i * 0.3, 1.325, -0.3);
+          g.add(cap);
+        }
+        const handle = box(1.1, 0.03, 0.09, M(0x4a4f57, { roughness: 0.6 }));
+        handle.position.set(0, 1.33, 0.02);
+        const label = mesh(new THREE.PlaneGeometry(1.7, 0.62), M(0xf4f5f7, { roughness: 0.45 }), 0, 0.56, 0.64);
+        const stripe = mesh(new THREE.PlaneGeometry(1.7, 0.2), M(0x0f9d8f, { roughness: 0.4 }), 0, 0.77, 0.642);
+        const bar = mesh(new THREE.PlaneGeometry(0.9, 0.05), M(0x23272d, { roughness: 0.5 }), -0.3, 0.52, 0.642);
+        const bar2 = mesh(new THREE.PlaneGeometry(0.55, 0.05), M(0x9aa1ab, { roughness: 0.5 }), -0.475, 0.4, 0.642);
+        g.add(handle, label, stripe, bar, bar2);
+        g.rotation.y = -0.5;
+        return g;
+      },
+
+      oil() {
+        const one = (color, labelColor) => {
+          const g = new THREE.Group();
+          const s = new THREE.Shape();
+          s.moveTo(-0.55, 0);
+          s.lineTo(0.55, 0);
+          s.quadraticCurveTo(0.68, 0, 0.68, 0.14);
+          s.lineTo(0.68, 1.2);
+          s.quadraticCurveTo(0.68, 1.5, 0.4, 1.62);
+          s.lineTo(-0.12, 1.84);
+          s.lineTo(-0.12, 1.98);
+          s.lineTo(-0.56, 1.98);
+          s.lineTo(-0.56, 1.8);
+          s.quadraticCurveTo(-0.68, 1.72, -0.68, 1.55);
+          s.lineTo(-0.68, 0.14);
+          s.quadraticCurveTo(-0.68, 0, -0.55, 0);
+          const hole = new THREE.Path();
+          hole.absellipse(0.36, 1.06, 0.1, 0.3, 0, Math.PI * 2, true);
+          s.holes.push(hole);
+          const plastic = M(color, { roughness: 0.36, metalness: 0.15 });
+          const body = mesh(new THREE.ExtrudeGeometry(s, { depth: 0.44, bevelEnabled: true, bevelSize: 0.07, bevelThickness: 0.07, bevelSegments: 5, curveSegments: 24 }), plastic, 0, 0, -0.22);
+          const cap = cyl(0.19, 0.19, 0.2, M(0x16181b, { roughness: 0.5 }), 28);
+          cap.position.set(-0.34, 2.08, 0);
+          const ring = cyl(0.2, 0.2, 0.04, M(0xc8202a, { roughness: 0.5 }), 28);
+          ring.position.set(-0.34, 1.97, 0);
+          const label = mesh(new THREE.PlaneGeometry(0.72, 0.86), M(labelColor, { roughness: 0.42 }), -0.24, 0.72, 0.2915);
+          const stripe = mesh(new THREE.PlaneGeometry(0.72, 0.16), M(0xc8202a, { roughness: 0.4 }), -0.24, 1.0, 0.2925);
+          const t1 = mesh(new THREE.PlaneGeometry(0.46, 0.05), M(0x2b2f36, { roughness: 0.5 }), -0.33, 0.78, 0.2925);
+          const t2 = mesh(new THREE.PlaneGeometry(0.3, 0.045), M(0x9aa1ab, { roughness: 0.5 }), -0.41, 0.67, 0.2925);
+          g.add(body, cap, ring, label, stripe, t1, t2);
+          return g;
+        };
+        const a = one(0xc99a2e, 0xf6f6f4);
+        a.rotation.y = -0.4;
+        a.position.set(-0.45, 0, 0.3);
+        const b = one(0x4b5563, 0xf6f6f4);
+        b.rotation.y = -0.15;
+        b.position.set(0.85, 0, -0.5);
+        return grp(a, b);
+      },
+    };
+
+    // ───────── 촬영 ─────────
+    const VIEW = { wiper: { el: 0.95, zoom: 0.74 }, plug: { el: 0.8, zoom: 0.74 }, shock: { el: 0.7, zoom: 0.76 }, disc: { el: 0.56, zoom: 0.62 }, pad: { el: 0.8, zoom: 0.8 }, airf: { el: 0.6, zoom: 0.66 }, cabin: { el: 0.62, zoom: 0.72 }, batt: { el: 0.36, zoom: 0.76 }, oil: { el: 0.24, zoom: 0.8 }, oilf: { el: 0.4, zoom: 0.76 } };
+
+    function shoot(name) {
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xe9ebee);
+      scene.environment = env;
+      scene.environmentIntensity = 0.8;
+      const model = MODELS[name]();
+      scene.add(model);
+      let bb = new THREE.Box3().setFromObject(model);
+      model.position.y -= bb.min.y;
+      bb = new THREE.Box3().setFromObject(model);
+      const c = bb.getCenter(new THREE.Vector3());
+      model.position.x -= c.x;
+      model.position.z -= c.z;
+      bb = new THREE.Box3().setFromObject(model);
+      const sphere = bb.getBoundingSphere(new THREE.Sphere());
+      const R = sphere.radius;
+
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.34 }));
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const key = new THREE.DirectionalLight(0xffffff, 2.3);
+      key.position.set(-R * 1.1, R * 3.6, R * 1.3);
+      key.target.position.copy(sphere.center);
+      key.castShadow = true;
+      key.shadow.mapSize.set(4096, 4096);
+      key.shadow.radius = 14;
+      key.shadow.blurSamples = 24;
+      key.shadow.bias = -0.0004;
+      key.shadow.normalBias = 0.01;
+      const sc = key.shadow.camera;
+      sc.left = sc.bottom = -R * 2;
+      sc.right = sc.top = R * 2;
+      sc.near = 0.1;
+      sc.far = R * 10;
+      scene.add(key, key.target, new THREE.HemisphereLight(0xffffff, 0xc9ced6, 0.35));
+
+      const fov = 24, v = VIEW[name] ?? { el: 0.5 };
+      const cam = new THREE.PerspectiveCamera(fov, W / H, 0.1, 200);
+      const dist = (R / Math.sin((fov * Math.PI) / 360)) * (v.zoom ?? 1.02);
+      const look = new THREE.Vector3(0, sphere.center.y * 0.9, 0);
+      cam.position.set(0, look.y + Math.sin(v.el) * dist, Math.cos(v.el) * dist);
+      cam.lookAt(look);
+      renderer.render(scene, cam);
+
+      const out = document.createElement('canvas');
+      out.width = OUT_W;
+      out.height = OUT_H;
+      const ctx = out.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(renderer.domElement, 0, 0, OUT_W, OUT_H);
+      return out.toDataURL('image/jpeg', 0.9);
+    }
+
+    window.NAMES = Object.keys(MODELS);
+    window.shoot = shoot;
+    window.READY = true;
+  </script>
+</body>
